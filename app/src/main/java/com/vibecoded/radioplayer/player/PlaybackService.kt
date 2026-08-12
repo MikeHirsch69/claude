@@ -2,6 +2,8 @@ package com.vibecoded.radioplayer.player
 
 import android.net.Uri
 import androidx.core.content.FileProvider
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Metadata
@@ -44,8 +46,15 @@ class PlaybackService : MediaLibraryService() {
         dataSourceFactory = ProxyAwareDataSourceFactory()
         val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
 
-        player = ExoPlayer.Builder(this)
+player = ExoPlayer.Builder(this)
             .setMediaSourceFactory(mediaSourceFactory)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .build(),
+                /* handleAudioFocus= */ true
+            )
             .build()
 
         player.addListener(object : Player.Listener {
