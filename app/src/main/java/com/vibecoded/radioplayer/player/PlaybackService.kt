@@ -297,20 +297,10 @@ class PlaybackService : MediaLibraryService() {
                 val requestedId = requested?.mediaId?.removePrefix("station_")?.toLongOrNull()
 
                 if (mediaItems.size == 1 && requestedId != null) {
-                    val requestedStation = db.stationDao().getById(requestedId)
-                    if (requestedStation != null) {
-                        val siblings = db.stationDao().getAll()
-                            .filter { it.folderId == requestedStation.folderId }
-                            .sortedBy { it.sortOrder }
-                        val index = siblings.indexOfFirst { it.id == requestedStation.id }.coerceAtLeast(0)
-                        queueStationsById = siblings.associateBy { it.id }
-                        currentStation = requestedStation
-                        dataSourceFactory.setActiveStation(requestedStation)
-                        future.set(
-                            MediaSession.MediaItemsWithStartPosition(
-                                siblings.map { buildMediaItem(it) }, index, startPositionMs
-                            )
-                        )
+                    val siblings = resolveQueue(db, requestedId)
+                    if (siblings != null) {
+                        val index = siblings.indexOfFirst { it.mediaId == "station_$requestedId" }.coerceAtLeast(0)
+                        future.set(MediaSession.MediaItemsWithStartPosition(siblings, index, startPositionMs))
                         return@launch
                     }
                 }
@@ -330,8 +320,12 @@ class PlaybackService : MediaLibraryService() {
             return future
         }
 
-        // Kept for controllers that append to the queue (addMediaItem/s) rather than
-        // replacing it via setMediaItem(s).
+        // Android Auto's "tap to play" from the browse tree (and Google Assistant voice
+        // requests) come in through the legacy playFromMediaId path, which the framework
+        // routes to onAddMediaItems rather than onSetMediaItems - so this needs the SAME
+        // sibling-queue expansion, or Auto never gets a real playlist and has nothing to
+        // skip to (no queue also means the car's steering-wheel skip buttons have nothing
+        // to do, since they rely on the same seek-to-next/previous player commands).
         override fun onAddMediaItems(
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
@@ -340,6 +334,18 @@ class PlaybackService : MediaLibraryService() {
             val future = SettableFuture.create<MutableList<MediaItem>>()
             serviceScope.launch {
                 val db = (application as RadioApp).database
+                val requested = mediaItems.firstOrNull()
+                val requestedId = requested?.mediaId?.removePrefix("station_")?.toLongOrNull()
+
+                if (mediaItems.size == 1 && requestedId != null) {
+                    val siblings = resolveQueue(db, requestedId)
+                    if (siblings != null) {
+                        future.set(siblings.toMutableList())
+                        return@launch
+                    }
+                }
+
+                // Fallback: resolve whatever was requested item-by-item without regrouping.
                 val resolved = mediaItems.mapNotNull { item ->
                     val stationId = item.mediaId.removePrefix("station_").toLongOrNull()
                         ?: return@mapNotNull null
@@ -352,6 +358,21 @@ class PlaybackService : MediaLibraryService() {
                 future.set(resolved)
             }
             return future
+        }
+
+        // Shared by both entry points: given a requested station id, builds the full
+        // sibling playlist (its folder, or the ungrouped list, sorted the same way the
+        // phone app and Auto's browse tree order them) and primes playback state for it.
+        // Returns null if the station id doesn't exist.
+        private suspend fun resolveQueue(db: com.vibecoded.radioplayer.data.AppDatabase, requestedId: Long): List<MediaItem>? {
+            val requestedStation = db.stationDao().getById(requestedId) ?: return null
+            val siblings = db.stationDao().getAll()
+                .filter { it.folderId == requestedStation.folderId }
+                .sortedBy { it.sortOrder }
+            queueStationsById = siblings.associateBy { it.id }
+            currentStation = requestedStation
+            dataSourceFactory.setActiveStation(requestedStation)
+            return siblings.map { buildMediaItem(it) }
         }
     }
 }
