@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -46,10 +47,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import kotlin.math.roundToInt
 import coil.compose.AsyncImage
 import com.vibecoded.radioplayer.R
 import com.vibecoded.radioplayer.data.Folder
@@ -164,9 +166,7 @@ fun StationListScreen(
 
                     Column(
                         modifier = Modifier
-                            .graphicsLayer {
-                                translationY = if (isDragging) dragOffsetY else 0f
-                            }
+                            .offset { IntOffset(0, if (isDragging) dragOffsetY.roundToInt() else 0) }
                             .zIndex(if (isDragging) 1f else 0f)
                     ) {
                         FolderHeader(
