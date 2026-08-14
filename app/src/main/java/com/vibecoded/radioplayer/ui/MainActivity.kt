@@ -15,6 +15,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
@@ -49,13 +50,13 @@ class MainActivity : ComponentActivity() {
                 var editingStation by remember { mutableStateOf<Station?>(null) }
                 var showAddDialog by remember { mutableStateOf(false) }
 
-                var currentPlaylist by remember { mutableStateOf(listOf<Station>()) }
-                var currentIndex by remember { mutableStateOf(0) }
-
                 var playerTitle by remember { mutableStateOf("") }
                 var playerArtist by remember { mutableStateOf("") }
                 var playerArtwork by remember { mutableStateOf<String?>(null) }
                 var isPlaying by remember { mutableStateOf(false) }
+                var hasActiveMedia by remember { mutableStateOf(false) }
+                var playbackState by remember { mutableStateOf(Player.STATE_IDLE) }
+                var statusMessage by remember { mutableStateOf<String?>(null) }
 
                 val stations by viewModel.stations.collectAsState()
                 val folders by viewModel.folders.collectAsState()
@@ -69,7 +70,8 @@ class MainActivity : ComponentActivity() {
                     ActivityResultContracts.GetContent()
                 ) { uri -> if (uri != null) viewModel.importBackup(uri) }
 
-                // Mirror the playback service's state (title/artist/art/playing) into the UI.
+                // Mirror the playback service's state (title/artist/art/playing/buffering)
+                // into the UI - shared by the Now Playing screen and the mini-player bar.
                 DisposableEffect(controller) {
                     if (controller != null) {
                         val listener = object : Player.Listener {
@@ -82,47 +84,79 @@ class MainActivity : ComponentActivity() {
                             override fun onIsPlayingChanged(playing: Boolean) {
                                 isPlaying = playing
                             }
+
+                            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                                hasActiveMedia = mediaItem != null
+                            }
+
+                            override fun onPlaybackStateChanged(state: Int) {
+                                // If we were buffering and dropped straight to IDLE with no
+                                // error attached, the service's 30s connect watchdog gave up.
+                                if (playbackState == Player.STATE_BUFFERING &&
+                                    state == Player.STATE_IDLE &&
+                                    controller.playerError == null
+                                ) {
+                                    statusMessage = "Couldn't connect. The stream timed out after 30 seconds."
+                                } else if (state == Player.STATE_READY) {
+                                    statusMessage = null
+                                }
+                                playbackState = state
+                            }
+
+                            override fun onPlayerError(error: PlaybackException) {
+                                statusMessage = error.message ?: "Playback error."
+                            }
                         }
                         controller.addListener(listener)
                         playerTitle = controller.mediaMetadata.title?.toString() ?: ""
                         playerArtist = controller.mediaMetadata.artist?.toString() ?: ""
                         playerArtwork = controller.mediaMetadata.artworkUri?.toString()
                         isPlaying = controller.isPlaying
+                        hasActiveMedia = controller.currentMediaItem != null
+                        playbackState = controller.playbackState
                         onDispose { controller.removeListener(listener) }
                     } else {
                         onDispose { }
                     }
                 }
 
-                fun playAt(index: Int, playlist: List<Station>) {
-                    if (playlist.isEmpty()) return
-                    val safeIndex = ((index % playlist.size) + playlist.size) % playlist.size
-                    currentPlaylist = playlist
-                    currentIndex = safeIndex
-                    val station = playlist[safeIndex]
+                fun play(station: Station) {
+                    statusMessage = null
                     val mediaItem = MediaItem.Builder()
                         .setMediaId("station_${station.id}")
                         .setUri(station.streamUrl)
                         .build()
+                    // The service expands this single placeholder item into the full
+                    // sibling queue (its folder, or the ungrouped list) so Next/Previous
+                    // work against a real playlist - see PlaybackService.onSetMediaItems.
                     controller?.setMediaItem(mediaItem)
                     controller?.prepare()
                     controller?.play()
                     screen = Screen.PLAYER
                 }
 
+                val isBuffering = playbackState == Player.STATE_BUFFERING
+
                 when (screen) {
                     Screen.PLAYER -> {
                         NowPlayingScreen(
-                            title = playerTitle.ifBlank { currentPlaylist.getOrNull(currentIndex)?.name ?: "" },
+                            title = playerTitle,
                             artist = playerArtist,
                             artworkUri = playerArtwork,
                             isPlaying = isPlaying,
+                            isBuffering = isBuffering,
+                            statusMessage = statusMessage,
                             onBack = { screen = Screen.LIST },
                             onPlayPause = {
                                 if (controller?.isPlaying == true) controller.pause() else controller?.play()
                             },
-                            onNext = { playAt(currentIndex + 1, currentPlaylist) },
-                            onPrevious = { playAt(currentIndex - 1, currentPlaylist) }
+                            onNext = { controller?.seekToNext() },
+                            onPrevious = { controller?.seekToPrevious() },
+                            onRetry = {
+                                statusMessage = null
+                                controller?.prepare()
+                                controller?.play()
+                            }
                         )
                     }
 
@@ -156,7 +190,7 @@ class MainActivity : ComponentActivity() {
                             StationListScreen(
                                 folders = folders,
                                 stations = stations,
-                                onPlay = { station, playlist -> playAt(playlist.indexOf(station), playlist) },
+                                onPlay = { station -> play(station) },
                                 onEdit = { editingStation = it },
                                 onDelete = { viewModel.deleteStation(it) },
                                 onMoveStation = { station, direction -> viewModel.moveStation(station, direction) },
@@ -164,8 +198,19 @@ class MainActivity : ComponentActivity() {
                                 onAddFolder = { viewModel.addFolder(it) },
                                 onRenameFolder = { folder, newName -> viewModel.renameFolder(folder, newName) },
                                 onDeleteFolder = { viewModel.deleteFolder(it) },
+                                onReorderFolders = { viewModel.reorderFolders(it) },
                                 onExportClick = { exportLauncher.launch("radio-player-backup.json") },
-                                onImportClick = { importLauncher.launch("application/json") }
+                                onImportClick = { importLauncher.launch("application/json") },
+                                showMiniPlayer = hasActiveMedia,
+                                miniTitle = playerTitle,
+                                miniArtist = playerArtist,
+                                miniArtwork = playerArtwork,
+                                miniIsPlaying = isPlaying,
+                                miniIsBuffering = isBuffering,
+                                onMiniPlayerClick = { screen = Screen.PLAYER },
+                                onMiniPlayPause = {
+                                    if (controller?.isPlaying == true) controller.pause() else controller?.play()
+                                }
                             )
                         }
                     }

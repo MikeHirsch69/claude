@@ -3,10 +3,46 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- Antenna mast -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6"
+        android:strokeLineCap="round"
+        android:pathData="M54,34 L54,82" />
+    <!-- Antenna tip -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M54,26 m-14,0 a14,14 0 1,0 28,0 a14,14 0 1,0 -28,0" />
+        android:pathData="M54,28 m-6,0 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0" />
+    <!-- Base -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M28,78 C28,60 39,48 54,48 C69,48 80,60 80,78 L70,78 C70,65 63,58 54,58 C45,58 38,65 38,78 Z" />
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6"
+        android:strokeLineCap="round"
+        android:pathData="M38,82 L70,82" />
+    <!-- Left broadcast waves -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M44,54 a14,14 0 0,0 0,20" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M36,48 a24,24 0 0,0 0,32" />
+    <!-- Right broadcast waves -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M64,54 a14,14 0 0,1 0,20" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M72,48 a24,24 0 0,1 0,32" />
 </vector>

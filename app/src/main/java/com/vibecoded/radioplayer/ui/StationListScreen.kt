@@ -1,6 +1,7 @@
 package com.vibecoded.radioplayer.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,9 +13,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
@@ -42,7 +46,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import coil.compose.AsyncImage
 import com.vibecoded.radioplayer.R
 import com.vibecoded.radioplayer.data.Folder
@@ -55,7 +62,7 @@ import com.vibecoded.radioplayer.util.StationImage
 fun StationListScreen(
     folders: List<Folder>,
     stations: List<Station>,
-    onPlay: (Station, List<Station>) -> Unit,
+    onPlay: (Station) -> Unit,
     onEdit: (Station) -> Unit,
     onDelete: (Station) -> Unit,
     onMoveStation: (Station, Int) -> Unit,
@@ -63,14 +70,30 @@ fun StationListScreen(
     onAddFolder: (String) -> Unit,
     onRenameFolder: (Folder, String) -> Unit,
     onDeleteFolder: (Folder) -> Unit,
+    onReorderFolders: (List<Folder>) -> Unit,
     onExportClick: () -> Unit,
-    onImportClick: () -> Unit
+    onImportClick: () -> Unit,
+    showMiniPlayer: Boolean,
+    miniTitle: String,
+    miniArtist: String,
+    miniArtwork: String?,
+    miniIsPlaying: Boolean,
+    miniIsBuffering: Boolean,
+    onMiniPlayerClick: () -> Unit,
+    onMiniPlayPause: () -> Unit
 ) {
     var expandedFolders by remember { mutableStateOf(setOf<Long>()) }
     var showFabMenu by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
     var showAddFolderDialog by remember { mutableStateOf(false) }
     var folderBeingRenamed by remember { mutableStateOf<Folder?>(null) }
+
+    // Local working order for drag-and-drop; resynced from the persisted list whenever it
+    // changes (e.g. after we ourselves persist a reorder, or another edit happens).
+    var folderOrder by remember(folders) { mutableStateOf(folders) }
+    var draggingFolderId by remember { mutableStateOf<Long?>(null) }
+    var dragOffsetY by remember { mutableStateOf(0f) }
+    val listState = rememberLazyListState()
 
     val ungrouped = stations.filter { it.folderId == null }.sortedBy { it.sortOrder }
 
@@ -113,6 +136,19 @@ fun StationListScreen(
                     })
                 }
             }
+        },
+        bottomBar = {
+            if (showMiniPlayer) {
+                MiniPlayerBar(
+                    title = miniTitle,
+                    artist = miniArtist,
+                    artworkUri = miniArtwork,
+                    isPlaying = miniIsPlaying,
+                    isBuffering = miniIsBuffering,
+                    onClick = onMiniPlayerClick,
+                    onPlayPause = onMiniPlayPause
+                )
+            }
         }
     ) { padding ->
         if (folders.isEmpty() && stations.isEmpty()) {
@@ -120,41 +156,103 @@ fun StationListScreen(
                 Text("No stations yet. Tap + to add one.")
             }
         } else {
-            LazyColumn(Modifier.fillMaxSize().padding(padding)) {
-                items(folders, key = { "folder_${it.id}" }) { folder ->
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(padding)) {
+                itemsIndexed(folderOrder, key = { _, folder -> "folder_${folder.id}" }) { index, folder ->
                     val folderStations = stations.filter { it.folderId == folder.id }.sortedBy { it.sortOrder }
                     val expanded = expandedFolders.contains(folder.id)
-                    FolderHeader(
-                        folder = folder,
-                        expanded = expanded,
-                        onToggle = {
-                            expandedFolders = if (expanded) expandedFolders - folder.id else expandedFolders + folder.id
-                        },
-                        onRename = { folderBeingRenamed = folder },
-                        onDelete = { onDeleteFolder(folder) }
-                    )
-                    if (expanded) {
-                        folderStations.forEachIndexed { index, station ->
-                            StationRow(
-                                station = station,
-                                onPlay = { onPlay(station, folderStations) },
-                                onEdit = { onEdit(station) },
-                                onDelete = { onDelete(station) },
-                                onMoveUp = { onMoveStation(station, -1) },
-                                onMoveDown = { onMoveStation(station, 1) },
-                                canMoveUp = index > 0,
-                                canMoveDown = index < folderStations.size - 1,
-                                indented = true
-                            )
+                    val isDragging = draggingFolderId == folder.id
+
+                    Column(
+                        modifier = Modifier
+                            .graphicsLayer {
+                                translationY = if (isDragging) dragOffsetY else 0f
+                            }
+                            .zIndex(if (isDragging) 1f else 0f)
+                    ) {
+                        FolderHeader(
+                            folder = folder,
+                            expanded = expanded,
+                            onToggle = {
+                                expandedFolders = if (expanded) expandedFolders - folder.id else expandedFolders + folder.id
+                            },
+                            onRename = { folderBeingRenamed = folder },
+                            onDelete = { onDeleteFolder(folder) },
+                            canMoveUp = index > 0,
+                            canMoveDown = index < folderOrder.size - 1,
+                            onMoveUp = {
+                                val newList = folderOrder.toMutableList().apply { add(index - 1, removeAt(index)) }
+                                folderOrder = newList
+                                onReorderFolders(newList)
+                            },
+                            onMoveDown = {
+                                val newList = folderOrder.toMutableList().apply { add(index + 1, removeAt(index)) }
+                                folderOrder = newList
+                                onReorderFolders(newList)
+                            },
+                            dragModifier = Modifier.pointerInput(folder.id) {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = {
+                                        // Collapse while dragging so the item height stays
+                                        // predictable and the drag feels smooth.
+                                        expandedFolders = expandedFolders - folder.id
+                                        draggingFolderId = folder.id
+                                        dragOffsetY = 0f
+                                    },
+                                    onDragEnd = {
+                                        draggingFolderId = null
+                                        dragOffsetY = 0f
+                                        onReorderFolders(folderOrder)
+                                    },
+                                    onDragCancel = {
+                                        draggingFolderId = null
+                                        dragOffsetY = 0f
+                                    },
+                                    onDrag = { change, dragAmount ->
+                                        change.consume()
+                                        dragOffsetY += dragAmount.y
+                                        val currentIndex = folderOrder.indexOfFirst { it.id == folder.id }
+                                        val itemSize = listState.layoutInfo.visibleItemsInfo
+                                            .find { it.key == "folder_${folder.id}" }?.size ?: 0
+                                        if (itemSize > 0) {
+                                            val moveBy = (dragOffsetY / itemSize).toInt()
+                                            if (moveBy != 0 && currentIndex >= 0) {
+                                                val targetIndex = (currentIndex + moveBy)
+                                                    .coerceIn(0, folderOrder.size - 1)
+                                                if (targetIndex != currentIndex) {
+                                                    folderOrder = folderOrder.toMutableList().apply {
+                                                        add(targetIndex, removeAt(currentIndex))
+                                                    }
+                                                    dragOffsetY -= moveBy * itemSize
+                                                }
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        )
+                        if (expanded) {
+                            folderStations.forEachIndexed { stationIndex, station ->
+                                StationRow(
+                                    station = station,
+                                    onPlay = { onPlay(station) },
+                                    onEdit = { onEdit(station) },
+                                    onDelete = { onDelete(station) },
+                                    onMoveUp = { onMoveStation(station, -1) },
+                                    onMoveDown = { onMoveStation(station, 1) },
+                                    canMoveUp = stationIndex > 0,
+                                    canMoveDown = stationIndex < folderStations.size - 1,
+                                    indented = true
+                                )
+                            }
                         }
+                        Divider()
                     }
-                    Divider()
                 }
                 items(ungrouped, key = { "station_${it.id}" }) { station ->
                     val index = ungrouped.indexOf(station)
                     StationRow(
                         station = station,
-                        onPlay = { onPlay(station, ungrouped) },
+                        onPlay = { onPlay(station) },
                         onEdit = { onEdit(station) },
                         onDelete = { onDelete(station) },
                         onMoveUp = { onMoveStation(station, -1) },
@@ -200,7 +298,12 @@ private fun FolderHeader(
     expanded: Boolean,
     onToggle: () -> Unit,
     onRename: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    dragModifier: Modifier
 ) {
     var showMenu by remember { mutableStateOf(false) }
     Row(
@@ -210,6 +313,13 @@ private fun FolderHeader(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // Long-press-and-drag handle: move a folder up/down in the overview by holding it.
+        Icon(
+            Icons.Default.DragHandle,
+            contentDescription = "Drag to reorder",
+            modifier = dragModifier
+        )
+        Spacer(Modifier.width(8.dp))
         Icon(Icons.Default.Folder, contentDescription = null)
         Spacer(Modifier.width(12.dp))
         Text(folder.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
@@ -220,6 +330,12 @@ private fun FolderHeader(
             }
             DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                 DropdownMenuItem(text = { Text("Rename") }, onClick = { showMenu = false; onRename() })
+                if (canMoveUp) {
+                    DropdownMenuItem(text = { Text("Move Up") }, onClick = { showMenu = false; onMoveUp() })
+                }
+                if (canMoveDown) {
+                    DropdownMenuItem(text = { Text("Move Down") }, onClick = { showMenu = false; onMoveDown() })
+                }
                 DropdownMenuItem(text = { Text("Delete Folder") }, onClick = { showMenu = false; onDelete() })
             }
         }

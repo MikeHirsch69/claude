@@ -146,6 +146,17 @@ class StationViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /** Persists a full new folder ordering (from drag-and-drop, or a Move Up/Down tap). */
+    fun reorderFolders(newOrder: List<Folder>) {
+        viewModelScope.launch {
+            newOrder.forEachIndexed { index, folder ->
+                if (folder.sortOrder != index) {
+                    folderRepository.update(folder.copy(sortOrder = index))
+                }
+            }
+        }
+    }
+
     fun exportBackup(uri: Uri) {
         viewModelScope.launch {
             BackupManager.export(getApplication(), uri, stations.value, folders.value)
